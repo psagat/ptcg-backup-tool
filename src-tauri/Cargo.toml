@@ -1,0 +1,27 @@
+[package]
+name = "ptcg-backup-tool"
+version = "0.1.0"
+description = "PC Backup & Restore Tool"
+authors = ["Pete"]
+edition = "2021"
+
+[lib]
+name = "ptcg_backup_tool_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-log = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+log = "0.4"
+walkdir = "2"
+tokio = { version = "1", features = ["fs", "sync", "io-util", "time"] }
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"
