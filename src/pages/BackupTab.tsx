@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Card, CardHeader, CardTitle, CardContent, Button, CheckboxRow, SectionLabel, Input, Badge, EmptyState } from '../components/ui';
 import UserList from '../components/UserList';
-import { getLocalUsers, getExternalUsers, startBackup, browseFolder, checkAdmin, detectBrowsers, detectOneDrive, detectExtraFolders, detectQuickbooks, openFolder, createDir } from '../lib/tauri';
+import { getLocalUsers, getExternalUsers, scanExternalSources, detectBitlockerDrives, startBackup, browseFolder, checkAdmin, detectBrowsers, detectOneDrive, detectExtraFolders, detectQuickbooks, openFolder, createDir } from '../lib/tauri';
+import BitLockerDialog from '../components/BitLockerDialog';
 import type { WindowsUser, ProgressState, BrowserToggles, ExtraFolder, QuickbooksInfo } from '../types';
 
 const INCLUDED_FOLDERS = ['Desktop', 'Documents', 'Downloads', 'Pictures', 'Music', 'Videos', 'Favorites', 'Saved Games'];
@@ -32,9 +33,12 @@ export default function BackupTab({ progress }: BackupTabProps) {
   const [isAdmin, setIsAdmin] = useState<boolean | null>(null);
   const [selectedUser, setSelectedUser] = useState<WindowsUser | null>(null);
 
-  const [useExternalDrive, setUseExternalDrive] = useState(false);
-  const [externalDrivePath, setExternalDrivePath] = useState('');
+  type SourceMode = 'local' | 'external' | 'browse';
+  const [sourceMode, setSourceMode] = useState<SourceMode>('local');
+  const [browsePath, setBrowsePath] = useState('');
   const [loadingExternal, setLoadingExternal] = useState(false);
+  const [lockedDrives, setLockedDrives] = useState<string[]>([]);
+  const [unlockTarget, setUnlockTarget] = useState<string | null>(null);
 
   // browsers: only detected ones are shown; all detected are enabled by default
   const [browsers, setBrowsers] = useState<BrowserToggles>(EMPTY_BROWSERS);
@@ -64,6 +68,7 @@ export default function BackupTab({ progress }: BackupTabProps) {
   const [loadingTargetUsers, setLoadingTargetUsers] = useState(false);
 
   const isRunning = progress.isRunning;
+  const scanToken = useRef(0);
 
   useEffect(() => {
     checkAdmin().then(setIsAdmin);
@@ -71,16 +76,19 @@ export default function BackupTab({ progress }: BackupTabProps) {
   }, []);
 
   function loadLocalUsers() {
+    const token = ++scanToken.current;
     setLoadingUsers(true);
+    setLoadingExternal(false);
     setLoadError('');
     getLocalUsers()
-      .then(setUsers)
+      .then((result) => { if (scanToken.current === token) setUsers(result); })
       .catch((e: unknown) => {
+        if (scanToken.current !== token) return;
         const msg = e instanceof Error ? e.message : String(e);
         setLoadError(msg);
         console.error('getLocalUsers failed:', e);
       })
-      .finally(() => setLoadingUsers(false));
+      .finally(() => { if (scanToken.current === token) setLoadingUsers(false); });
   }
 
   function clearSourceUser() {
@@ -146,22 +154,55 @@ export default function BackupTab({ progress }: BackupTabProps) {
       .catch(console.error);
   }
 
-  async function handleBrowseExternal() {
-    const path = await browseFolder('Select external drive or folder');
-    if (path) {
-      setExternalDrivePath(path);
-      setLoadingExternal(true);
-      setUsers([]);
-      clearSourceUser();
-      getExternalUsers(path)
-        .then(setUsers)
-        .catch((e: unknown) => {
-          const msg = e instanceof Error ? e.message : String(e);
-          setLoadError(msg);
-          console.error('getExternalUsers failed:', e);
-        })
-        .finally(() => setLoadingExternal(false));
-    }
+  function loadExternalProfiles() {
+    const token = ++scanToken.current;
+    setLoadingExternal(true);
+    setLoadingUsers(false);
+    setUsers([]);
+    clearSourceUser();
+    setLoadError('');
+    setLockedDrives([]);
+    // Profile scan and BitLocker detection run independently so profiles
+    // always appear even if BitLocker detection takes extra time.
+    scanExternalSources()
+      .then((sources) => {
+        if (scanToken.current !== token) return;
+        const profiles = sources
+          .filter((s) => s.kind === 'profile')
+          .map((s) => (s as Extract<typeof s, { kind: 'profile' }>).user);
+        setUsers(profiles);
+      })
+      .catch((e: unknown) => {
+        if (scanToken.current !== token) return;
+        const msg = e instanceof Error ? e.message : String(e);
+        setLoadError(msg);
+      })
+      .finally(() => { if (scanToken.current === token) setLoadingExternal(false); });
+    detectBitlockerDrives()
+      .then((drives) => { if (scanToken.current === token) setLockedDrives(drives); })
+      .catch(console.error);
+  }
+
+  async function handleBrowse() {
+    const path = await browseFolder('Select folder containing user profiles');
+    if (!path) return; // user cancelled — don't change anything
+    const token = ++scanToken.current;
+    setSourceMode('browse');
+    setBrowsePath(path);
+    setLoadingExternal(true);
+    setLoadingUsers(false);
+    setUsers([]);
+    clearSourceUser();
+    setLoadError('');
+    getExternalUsers(path)
+      .then((result) => { if (scanToken.current === token) setUsers(result); })
+      .catch((e: unknown) => {
+        if (scanToken.current !== token) return;
+        const msg = e instanceof Error ? e.message : String(e);
+        setLoadError(msg);
+        console.error('getExternalUsers failed:', e);
+      })
+      .finally(() => { if (scanToken.current === token) setLoadingExternal(false); });
   }
 
   async function handleBrowseDestination() {
@@ -251,54 +292,30 @@ export default function BackupTab({ progress }: BackupTabProps) {
             </div>
           </CardHeader>
           <CardContent>
-            {/* External drive toggle */}
-            <div className="flex items-center gap-3 mb-3">
-              <button
-                onClick={() => {
-                  setUseExternalDrive(false);
-                  setUsers([]);
-                  clearSourceUser();
-                  loadLocalUsers();
-                }}
-                className={`text-xs px-3 py-1.5 rounded-md border transition-colors ${
-                  !useExternalDrive
-                    ? 'border-accent/50 bg-accent/10 text-accent'
-                    : 'border-white/10 text-white/40 hover:text-white/70'
-                }`}
-              >
-                This PC
-              </button>
-              <button
-                onClick={() => {
-                  setUseExternalDrive(true);
-                  if (externalDrivePath) {
-                    setUsers([]);
-                    clearSourceUser();
-                    setLoadingExternal(true);
-                    getExternalUsers(externalDrivePath)
-                      .then(setUsers)
-                      .catch((e: unknown) => {
-                        const msg = e instanceof Error ? e.message : String(e);
-                        setLoadError(msg);
-                      })
-                      .finally(() => setLoadingExternal(false));
-                  }
-                }}
-                className={`text-xs px-3 py-1.5 rounded-md border transition-colors ${
-                  useExternalDrive
-                    ? 'border-accent/50 bg-accent/10 text-accent'
-                    : 'border-white/10 text-white/40 hover:text-white/70'
-                }`}
-              >
-                External Drive
-              </button>
-              {useExternalDrive && (
-                <Button size="sm" variant="secondary" onClick={handleBrowseExternal}>
-                  Browse…
-                </Button>
-              )}
-              {useExternalDrive && externalDrivePath && (
-                <span className="text-xs text-white/40 font-mono truncate max-w-[200px]">{externalDrivePath}</span>
+            {/* Source mode toggle */}
+            <div className="mb-3">
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => { setSourceMode('local'); setUsers([]); clearSourceUser(); loadLocalUsers(); }}
+                  className={`text-xs px-3 py-1.5 rounded-md border transition-colors ${sourceMode === 'local' ? 'border-accent/50 bg-accent/10 text-accent' : 'border-white/10 text-white/40 hover:text-white/70'}`}
+                >
+                  This PC
+                </button>
+                <button
+                  onClick={() => { setSourceMode('external'); loadExternalProfiles(); }}
+                  className={`text-xs px-3 py-1.5 rounded-md border transition-colors ${sourceMode === 'external' ? 'border-accent/50 bg-accent/10 text-accent' : 'border-white/10 text-white/40 hover:text-white/70'}`}
+                >
+                  External Drive
+                </button>
+                <button
+                  onClick={handleBrowse}
+                  className={`text-xs px-3 py-1.5 rounded-md border transition-colors ${sourceMode === 'browse' ? 'border-accent/50 bg-accent/10 text-accent' : 'border-white/10 text-white/40 hover:text-white/70'}`}
+                >
+                  Browse
+                </button>
+              </div>
+              {sourceMode === 'browse' && browsePath && (
+                <p className="text-xs text-white/35 font-mono mt-1.5 truncate">{browsePath}</p>
               )}
             </div>
 
@@ -315,19 +332,52 @@ export default function BackupTab({ progress }: BackupTabProps) {
               </div>
             )}
 
-            {useExternalDrive && !externalDrivePath ? (
+            {sourceMode === 'browse' && !browsePath ? (
               <EmptyState
-                message="No external drive selected"
-                sub='Click "Browse…" to select a drive or folder'
+                message="No folder selected"
+                sub="Click Browse to open a folder containing user profiles"
               />
             ) : (
-              <UserList
-                users={users}
-                selectedSid={selectedUser?.sid ?? null}
-                onSelect={handleUserSelect}
-                onDeselect={clearSourceUser}
-                loading={loadingUsers || loadingExternal}
-              />
+              <>
+                <UserList
+                  users={users}
+                  selectedSid={selectedUser?.sid ?? null}
+                  onSelect={handleUserSelect}
+                  onDeselect={clearSourceUser}
+                  loading={loadingUsers || loadingExternal}
+                  emptySub={
+                    sourceMode === 'external'
+                      ? lockedDrives.length > 0
+                        ? 'Unlock the drive below to scan its profiles.'
+                        : 'No external drives with user profiles were found.'
+                      : 'Run as Administrator to read all profiles.'
+                  }
+                />
+                {/* BitLocker-locked drives notice */}
+                {sourceMode === 'external' && !loadingExternal && lockedDrives.length > 0 && (
+                  <div className="mt-2 space-y-1.5">
+                    {lockedDrives.map((drive) => (
+                      <div
+                        key={drive}
+                        className="flex items-center justify-between gap-3 px-3 py-2 rounded-md bg-amber-500/8 border border-amber-500/20"
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="text-amber-400 flex-none">🔒</span>
+                          <span className="text-xs text-amber-300/80">
+                            Drive <span className="font-mono">{drive}</span> is BitLocker-encrypted
+                          </span>
+                        </div>
+                        <button
+                          onClick={() => setUnlockTarget(drive)}
+                          className="flex-none text-xs px-2.5 py-1 rounded border border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 transition-colors"
+                        >
+                          Unlock
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
             )}
           </CardContent>
         </Card>
@@ -639,6 +689,18 @@ export default function BackupTab({ progress }: BackupTabProps) {
         )}
       </div>
       </div>
+
+      {/* BitLocker unlock dialog */}
+      {unlockTarget && (
+        <BitLockerDialog
+          drive={unlockTarget}
+          onUnlocked={() => {
+            setUnlockTarget(null);
+            loadExternalProfiles();
+          }}
+          onClose={() => setUnlockTarget(null)}
+        />
+      )}
     </div>
   );
 }

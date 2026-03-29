@@ -187,6 +187,82 @@ async fn detect_quickbooks(profile_path: String) -> QuickbooksInfo {
     .unwrap_or_else(|_| QuickbooksInfo { public_path: None, documents_files: Vec::new() })
 }
 
+// ── BitLocker ──────────────────────────────────────────────────────────────────
+
+/// Returns drive letters (e.g. ["E:", "F:"]) that are BitLocker-locked.
+/// Uses the Windows ERROR_DRIVE_LOCKED error code (6800) — no manage-bde spawn needed.
+#[tauri::command]
+async fn detect_bitlocker_drives() -> Vec<String> {
+    log::info!("→ detect_bitlocker_drives");
+    tauri::async_runtime::spawn_blocking(|| {
+        let mut locked: Vec<String> = Vec::new();
+        for letter in users::all_drive_letters() {
+            if letter == 'C' { continue; }
+            let drive_root = format!("{}:\\", letter);
+            let drive_label = format!("{}:", letter);
+            let root = std::path::Path::new(&drive_root);
+            match std::fs::read_dir(root) {
+                Ok(_) => {}
+                Err(e) => {
+                    // BitLocker surfaces as either:
+                    //   Win32  ERROR_DRIVE_LOCKED = 6800 (0x1A90)
+                    //   HRESULT with FVE facility  = 0x8031xxxx (bits 16-26 == 0x31)
+                    let is_bitlocker = match e.raw_os_error() {
+                        Some(code) => {
+                            code == 6800
+                                || (code < 0 && ((code as u32 >> 16) & 0x7FF) == 0x031)
+                        }
+                        None => false,
+                    };
+                    if is_bitlocker {
+                        log::info!("detect_bitlocker_drives: {} is BitLocker-locked", drive_label);
+                        locked.push(drive_label);
+                    }
+                }
+            }
+        }
+        locked
+    })
+    .await
+    .unwrap_or_default()
+}
+
+/// Attempts to unlock a BitLocker-encrypted drive using manage-bde.
+/// key_type must be "password" or "recovery".
+#[tauri::command]
+async fn unlock_bitlocker_drive(drive: String, key: String, key_type: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let flag = match key_type.as_str() {
+            "password" => "-Password",
+            "recovery" => "-RecoveryPassword",
+            other => return Err(format!("Unknown key type: {other}")),
+        };
+        log::info!("unlock_bitlocker_drive: attempting unlock of {} ({})", drive, key_type);
+        let output = std::process::Command::new("manage-bde")
+            .args(["-unlock", &drive, flag, &key])
+            .output()
+            .map_err(|e| format!("Failed to run manage-bde: {e}"))?;
+
+        if output.status.success() {
+            log::info!("unlock_bitlocker_drive: {} unlocked successfully", drive);
+            Ok(())
+        } else {
+            let msg = String::from_utf8_lossy(&output.stdout).to_string()
+                + &String::from_utf8_lossy(&output.stderr);
+            let msg = msg.trim().to_string();
+            let msg = if msg.is_empty() {
+                "Unlock failed — check the key and try again.".to_string()
+            } else {
+                msg
+            };
+            log::warn!("unlock_bitlocker_drive: {} failed: {}", drive, msg);
+            Err(msg)
+        }
+    })
+    .await
+    .map_err(|e| format!("Task failed: {e}"))?
+}
+
 /// Opens the given folder path in Windows Explorer (or the OS file manager).
 #[tauri::command]
 async fn open_folder(app: tauri::AppHandle, path: String) -> Result<(), String> {
@@ -475,6 +551,8 @@ pub fn run() {
             detect_onedrive,
             detect_extra_folders,
             detect_quickbooks,
+            detect_bitlocker_drives,
+            unlock_bitlocker_drive,
             open_folder,
             start_backup,
             start_restore,

@@ -71,6 +71,18 @@ export async function detectExtraFolders(profilePath: string): Promise<ExtraFold
   return invoke<ExtraFolder[]>('detect_extra_folders', { profilePath });
 }
 
+/** Returns drive letters (e.g. ["E:", "F:"]) that are BitLocker-locked. */
+export async function detectBitlockerDrives(): Promise<string[]> {
+  if (!isTauri()) return [];
+  return invoke<string[]>('detect_bitlocker_drives');
+}
+
+/** Attempts to unlock a BitLocker drive. Throws on failure with the error message from manage-bde. */
+export async function unlockBitlockerDrive(drive: string, key: string, keyType: 'password' | 'recovery'): Promise<void> {
+  if (!isTauri()) return;
+  return invoke('unlock_bitlocker_drive', { drive, key, keyType });
+}
+
 /** Checks for QuickBooks files at the shared Intuit location and in the user's Documents. */
 export async function detectQuickbooks(profilePath: string): Promise<QuickbooksInfo> {
   if (!isTauri()) return { publicPath: null, documentsFiles: [] };

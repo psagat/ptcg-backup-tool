@@ -1,6 +1,6 @@
 [package]
 name = "ptcg-backup-tool"
-version = "0.1.0"
+version = "1.1.0"
 description = "PC Backup & Restore Tool"
 authors = ["Pete"]
 edition = "2021"
@@ -25,3 +25,4 @@ tokio = { version = "1", features = ["fs", "sync", "io-util", "time"] }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
+windows-sys = { version = "0.52", features = ["Win32_Storage_FileSystem"] }

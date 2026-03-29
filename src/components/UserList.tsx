@@ -8,6 +8,7 @@ interface UserListProps {
   onDeselect?: () => void;
   loading?: boolean;
   emptyMessage?: string;
+  emptySub?: string;
 }
 
 export default function UserList({
@@ -17,6 +18,7 @@ export default function UserList({
   onDeselect,
   loading = false,
   emptyMessage = 'No user profiles found.',
+  emptySub = 'Run as Administrator to read all profiles.',
 }: UserListProps) {
   if (loading) {
     return (
@@ -33,7 +35,7 @@ export default function UserList({
   }
 
   if (users.length === 0) {
-    return <EmptyState message={emptyMessage} sub="Run as Administrator to read all profiles." />;
+    return <EmptyState message={emptyMessage} sub={emptySub} />;
   }
 
   return (

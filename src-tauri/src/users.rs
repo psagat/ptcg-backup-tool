@@ -88,14 +88,12 @@ pub fn get_external_users(drive_path: &str) -> Vec<WindowsUser> {
 pub fn scan_external_sources() -> Vec<ExternalSource> {
     let mut results: Vec<ExternalSource> = Vec::new();
 
-    for letter in b'A'..=b'Z' {
-        if letter == b'C' { continue; }
+    for letter in all_drive_letters() {
+        if letter == 'C' { continue; }
 
-        let drive_str  = format!("{}:\\", letter as char);
+        let drive_label = format!("{}:", letter);
+        let drive_str  = format!("{}:\\", letter);
         let drive_root = Path::new(&drive_str);
-        if !drive_root.exists() { continue; }
-
-        let drive_label = format!("{}:", letter as char);
 
         // ── Backup folders: root-level dirs containing manifest.json ──────────
         if let Ok(entries) = std::fs::read_dir(drive_root) {
@@ -125,9 +123,12 @@ pub fn scan_external_sources() -> Vec<ExternalSource> {
         if users_dir.is_dir() {
             info!("scan_external_sources: \\Users found on {}", drive_label);
             let users = scan_users_dir(&users_dir, false);
+            info!("scan_external_sources: {} profile(s) on {}", users.len(), drive_label);
             for user in users {
                 results.push(ExternalSource::Profile { drive: drive_label.clone(), user });
             }
+        } else {
+            info!("scan_external_sources: no \\Users on {}", drive_label);
         }
     }
 
@@ -328,6 +329,27 @@ fn expand_env_str(s: &str) -> String {
         .replace("%systemdrive%",  &sys_drive)
         .replace("%SystemRoot%",   &sys_root)
         .replace("%systemroot%",   &sys_root)
+}
+
+// ── Drive enumeration ────────────────────────────────────────────────────────
+
+/// Returns all drive letters present on this machine using GetLogicalDrives().
+/// Unlike Path::exists() (which calls GetFileAttributesW), GetLogicalDrives()
+/// works at the partition-manager level and correctly reports BitLocker-locked
+/// volumes that have no mounted filesystem.
+#[cfg(windows)]
+pub fn all_drive_letters() -> Vec<char> {
+    use windows_sys::Win32::Storage::FileSystem::GetLogicalDrives;
+    let mask = unsafe { GetLogicalDrives() };
+    (0u32..26)
+        .filter(|&i| mask & (1 << i) != 0)
+        .map(|i| (b'A' + i as u8) as char)
+        .collect()
+}
+
+#[cfg(not(windows))]
+pub fn all_drive_letters() -> Vec<char> {
+    Vec::new()
 }
 
 // ── Filesystem helpers ───────────────────────────────────────────────────────

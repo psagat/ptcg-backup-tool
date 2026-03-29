@@ -2,7 +2,7 @@
 
 A Windows profile backup and restore tool built for technicians. Copies user data — documents, desktop, pictures, browser bookmarks, Outlook mail stores — from any source profile to a destination folder or directly into another Windows user account. Handles OneDrive Known Folder Move (KFM) transparently so files always land in the right place after a restore.
 
-**Version:** 0.1.0
+**Version:** 1.1.0
 **Platform:** Windows 10 1709+ / Windows 11
 **Built with:** Tauri 2 · Rust · React 19 · TypeScript · Tailwind CSS v3
 
@@ -24,7 +24,9 @@ Copies a source Windows user profile to a destination folder on any drive. A `ma
 | Option | Details |
 |---|---|
 | **Source User** | Pick any local Windows profile found under `C:\Users\`. The list shows each account's display name, SID, and total profile size. System accounts (Default, Public, All Users) are excluded. |
-| **External Drive** | Switch to "External Drive" mode to browse a drive or folder and scan profiles from an old PC's pulled hard disk. |
+| **External Drive** | Auto-scans all connected drive letters (A–Z except C:) for Windows user profiles. Profiles from every detected drive are shown in a single list. |
+| **Browse** | Opens a folder picker immediately — select any `Users\` folder on a network share, USB drive, or any other location. |
+| **BitLocker** | If a drive is BitLocker-encrypted, an amber notice appears with an Unlock button. Enter a Recovery Key or Password to unlock the drive in-place; the scan re-runs automatically once unlocked. |
 | **Destination** | The folder where the backup will be created. A subfolder named after the source username is appended automatically — just point at the root of your external drive or network share. |
 | **Folders Included** | Standard shell folders are always included: Desktop, Documents, Downloads, Pictures, Music, Videos, and Favorites. Their real paths are read from the Windows registry (Shell Folders key) so renamed or relocated folders are handled correctly. |
 | **Extra Folders** | Any non-standard folder found in the profile root is listed with its size. Check any you want to include — for example a custom `Projects\` or `Saved Games\` folder. |
